@@ -1,0 +1,432 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>SignBridge</title>
+
+    <link rel="stylesheet" href="styles.css">
+
+    <!-- MediaPipe -->
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands/hands.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/camera_utils/camera_utils.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/drawing_utils/drawing_utils.js"></script>
+</head>
+
+<body>
+
+<header>
+    <div class="logo">🤟 SignBridge</div>
+
+    <nav>
+        <button onclick="showPage('home')">Home</button>
+        <button onclick="showPage('learn')">Learn</button>
+        <button onclick="showPage('game')">Game</button>
+        <button onclick="showPage('library')">Library</button>
+    </nav>
+</header>
+
+
+<!-- ================= HOME ================= -->
+
+<section id="home" class="page active">
+
+    <div class="hero">
+
+        <div class="hero-text">
+
+            <p class="small-title">
+                REAL-TIME SIGN LANGUAGE LEARNING
+            </p>
+
+            <h1>
+                Learn signs.<br>
+                <span>Practice live.</span><br>
+                Get instant feedback.
+            </h1>
+
+            <p>
+                SignBridge helps you learn sign language using your webcam.
+                The system tracks your hand landmarks in real time and gives
+                immediate feedback while you practice.
+            </p>
+
+            <button class="primary"
+                    onclick="showPage('learn')">
+                Start Learning
+            </button>
+
+            <button class="secondary"
+                    onclick="openPractice()">
+                Try Camera
+            </button>
+
+        </div>
+
+
+        <div class="hero-demo">
+
+            <div class="hand">
+                ✋
+            </div>
+
+            <h3>Real-time hand tracking</h3>
+
+            <p>
+                MediaPipe detects 21 hand landmarks directly
+                from your webcam.
+            </p>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+<!-- ================= LEARN ================= -->
+
+<section id="learn" class="page">
+
+    <div class="title">
+
+        <p class="small-title">LEARNING</p>
+
+        <h2>
+            What do you want to learn?
+        </h2>
+
+    </div>
+
+
+    <div class="cards">
+
+        <div class="card">
+
+            <div class="card-icon">
+                🔤
+            </div>
+
+            <h3>Alphabet</h3>
+
+            <p>
+                Learn fingerspelling signs from A–Z.
+            </p>
+
+            <button onclick="openPractice('Alphabet')">
+                Start
+            </button>
+
+        </div>
+
+
+        <div class="card">
+
+            <div class="card-icon">
+                👋
+            </div>
+
+            <h3>Vocabulary</h3>
+
+            <p>
+                Practice common everyday signs.
+            </p>
+
+            <button onclick="openPractice('Vocabulary')">
+                Start
+            </button>
+
+        </div>
+
+
+        <div class="card">
+
+            <div class="card-icon">
+                💬
+            </div>
+
+            <h3>Sentences</h3>
+
+            <p>
+                Combine signs into short sentences.
+            </p>
+
+            <button onclick="openPractice('Sentence')">
+                Start
+            </button>
+
+        </div>
+
+    </div>
+
+
+    <!-- CAMERA PRACTICE -->
+
+    <div id="practice" class="practice hidden">
+
+        <div class="practice-header">
+
+            <div>
+
+                <p class="small-title">
+                    PRACTICE MODE
+                </p>
+
+                <h2 id="practiceTitle">
+                    Camera Practice
+                </h2>
+
+            </div>
+
+            <button onclick="closePractice()">
+                ✕
+            </button>
+
+        </div>
+
+
+        <div class="practice-grid">
+
+
+            <!-- Webcam -->
+
+            <div class="camera-box">
+
+                <video
+                    id="video"
+                    autoplay
+                    playsinline muted>
+                </video>
+
+                <canvas id="canvas"></canvas>
+
+                <div
+                    id="cameraPlaceholder"
+                    class="camera-placeholder">
+
+                    📷
+
+                    <p>
+                        Camera not started
+                    </p>
+
+                </div>
+
+            </div>
+
+
+            <!-- Recognition Information -->
+
+            <div class="recognition-panel">
+
+                <p class="small-title">
+                    HAND TRACKING
+                </p>
+
+                <div class="target">
+
+                    <div class="target-hand">
+                        ✋
+                    </div>
+
+                    <h2>
+                        Hand tracking
+                    </h2>
+
+                    <p>
+                        Move your hand in front of the camera
+                    </p>
+
+                </div>
+
+
+                <div class="result-row">
+
+                    <span>
+                        Detected
+                    </span>
+
+                    <strong id="gesture">
+                        —
+                    </strong>
+
+                </div>
+
+
+                <div class="result-row">
+
+                    <span>
+                        Tracking
+                    </span>
+
+                    <strong id="confidence">
+                        —
+                    </strong>
+
+                </div>
+
+
+                <div class="progress" hidden>
+
+                    <div id="progressBar"></div>
+
+                </div>
+
+
+                <div
+                    id="feedback"
+                    class="feedback" role="status" aria-live="polite">
+
+                    Show your hand to the camera.
+
+                </div>
+
+
+                <button
+                    id="startCamera"
+                    class="primary"
+                    onclick="startCamera()">
+
+                    Enable Camera
+
+                </button>
+
+
+                <button
+                    class="secondary"
+                    onclick="stopCamera()">
+
+                    Stop Camera
+
+                </button>
+
+            </div>
+
+        </div>
+
+        <div class="developer-note"><strong>Camera demo</strong><p>This version tracks hand landmarks only. Letter recognition is not connected.</p></div>
+
+    </div>
+
+</section>
+
+
+
+<!-- ================= GAME ================= -->
+
+<section id="game" class="page">
+
+    <div class="title">
+
+        <p class="small-title">
+            GAME MODE
+        </p>
+
+        <h2>
+            Sign Sprint
+        </h2>
+
+        <p>
+            Practice signs before the timer reaches zero.
+        </p>
+
+    </div>
+
+
+    <div class="game-panel">
+
+        <div>
+
+            <p>
+                60 SECOND CHALLENGE
+            </p>
+
+            <h2>
+                How many signs can you complete?
+            </h2>
+
+            <button
+                class="primary"
+                onclick="startGame()">
+
+                Start Game
+
+            </button>
+
+        </div>
+
+
+        <div class="game-stats">
+
+            <div>
+
+                <span>TIME</span>
+
+                <strong id="time">
+                    60
+                </strong>
+
+            </div>
+
+
+            <div>
+
+                <span>SCORE</span>
+
+                <strong id="score">
+                    0
+                </strong>
+
+            </div>
+
+        </div>
+
+    </div>
+
+</section>
+
+
+
+<!-- ================= LIBRARY ================= -->
+
+<section id="library" class="page">
+
+    <div class="title">
+
+        <p class="small-title">
+            SIGN LIBRARY
+        </p>
+
+        <h2>
+            Search for a sign
+        </h2>
+
+    </div>
+
+
+    <input
+        id="search"
+        type="text"
+        placeholder="Search..."
+        oninput="searchSigns()">
+
+
+    <div id="signList" class="sign-list">
+
+    </div>
+
+</section>
+
+
+<footer>
+
+    SignBridge Senior Project
+
+</footer>
+
+
+<script src="app.js"></script>
+
+</body>
+</html>
