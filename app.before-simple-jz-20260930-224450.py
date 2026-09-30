@@ -14,8 +14,6 @@ import mediapipe as mp
 from utils import CvFpsCalc
 from model import KeyPointClassifier
 from model import PointHistoryClassifier
-from jz_external import LiveMotionClassifier
-from jz_trace import TraceLetterClassifier
 
 
 def get_args():
@@ -71,13 +69,6 @@ def main():
     keypoint_classifier = KeyPointClassifier()
 
     point_history_classifier = PointHistoryClassifier()
-    try:
-        motion_classifier = LiveMotionClassifier()
-        print('Loaded J/Z motion model:', motion_classifier.model_path)
-    except FileNotFoundError as error:
-        motion_classifier = None
-        print('J/Z motion model unavailable:', error)
-    trace_classifier = TraceLetterClassifier()
 
     # Read labels ###########################################################
     with open('model/keypoint_classifier/keypoint_classifier_label.csv',
@@ -106,10 +97,6 @@ def main():
 
     #  ########################################################################
     mode = 0
-    trace_mode = False
-    trace_points = []
-    trace_display_points = []
-    trace_result = ''
 
     while True:
         fps = cvFpsCalc.get()
@@ -118,13 +105,6 @@ def main():
         key = cv.waitKey(10)
         if key == 27:  # ESC
             break
-        if key == 9:  # Tab toggles middle-finger trace mode
-            trace_mode = not trace_mode
-            trace_points.clear()
-            trace_display_points.clear()
-            trace_result = ''
-            if motion_classifier is not None:
-                motion_classifier.reset('Trace mode active' if trace_mode else 'Show one hand')
         number, mode = select_mode(key, mode)
 
         # Camera capture #####################################################
@@ -142,59 +122,7 @@ def main():
         image.flags.writeable = True
 
         #  ####################################################################
-        motion_sign_text = ''
-        motion_debug_text = 'J/Z model unavailable' if motion_classifier is None else 'J/Z: show one hand'
-        trace_status = 'Extend middle finger to draw; fold to guess' if trace_mode else ''
         if results.multi_hand_landmarks is not None:
-            if trace_mode:
-                if motion_classifier is not None:
-                    motion_classifier.reset('Trace mode active')
-                if len(results.multi_hand_landmarks) == 1:
-                    trace_landmarks = results.multi_hand_landmarks[0].landmark
-                    wrist = np.array([trace_landmarks[0].x, trace_landmarks[0].y])
-                    middle_tip = np.array([trace_landmarks[12].x, trace_landmarks[12].y])
-                    middle_pip = np.array([trace_landmarks[10].x, trace_landmarks[10].y])
-                    middle_extended = (
-                        np.linalg.norm(middle_tip - wrist) >
-                        1.1 * np.linalg.norm(middle_pip - wrist)
-                    )
-                    if middle_extended:
-                        if not trace_points:
-                            trace_display_points.clear()
-                            trace_result = ''
-                        point = [
-                            trace_landmarks[12].x * debug_image.shape[1],
-                            trace_landmarks[12].y * debug_image.shape[0],
-                        ]
-                        if not trace_points or np.linalg.norm(np.asarray(point) - trace_points[-1]) >= 2:
-                            trace_points.append(point)
-                        trace_status = 'Drawing J/Z; fold middle finger to guess'
-                    elif trace_points:
-                        trace_result = trace_classifier.classify(trace_points) or 'Unclear'
-                        trace_display_points = trace_points.copy()
-                        trace_points.clear()
-                        trace_status = 'Result: ' + trace_result
-                    elif trace_result:
-                        trace_status = 'Result: ' + trace_result + ' (extend to draw again)'
-                    else:
-                        trace_status = 'Middle finger ready; extend it to draw'
-                else:
-                    trace_points.clear()
-                    trace_status = 'Trace mode needs exactly one hand'
-                motion_debug_text = trace_status
-            elif motion_classifier is not None and len(results.multi_hand_landmarks) == 1:
-                motion_landmarks = results.multi_hand_landmarks[0].landmark
-                motion_points = np.array([
-                    [landmark.x * debug_image.shape[1], landmark.y * debug_image.shape[0]]
-                    for landmark in motion_landmarks
-                ], dtype=np.float32)
-                motion_side = results.multi_handedness[0].classification[0].label
-                motion_sign_text = motion_classifier.update(motion_points, motion_side)
-                motion_debug_text = motion_classifier.debug_text
-            elif motion_classifier is not None:
-                motion_classifier.reset('J/Z needs exactly one hand')
-                motion_debug_text = motion_classifier.debug_text
-
             for hand_landmarks, handedness in zip(results.multi_hand_landmarks,
                                                   results.multi_handedness):
                 # Bounding box calculation
@@ -237,29 +165,14 @@ def main():
                     debug_image,
                     brect,
                     handedness,
-                    (('Tracing' if trace_points else trace_result or 'Trace mode')
-                     if trace_mode else
-                     motion_sign_text or keypoint_classifier_labels[hand_sign_id]),
+                    keypoint_classifier_labels[hand_sign_id],
                     point_history_classifier_labels[most_common_fg_id[0][0]],
                 )
         else:
             point_history.append([0, 0])
-            if trace_mode:
-                trace_points.clear()
-                trace_status = 'Trace mode: no hand detected'
-                motion_debug_text = trace_status
-            elif motion_classifier is not None:
-                motion_classifier.reset('J/Z: no hand detected')
-                motion_debug_text = motion_classifier.debug_text
 
-        if trace_mode:
-            trace_to_draw = trace_points if trace_points else trace_display_points
-            debug_image = draw_trace(debug_image, trace_to_draw)
-        else:
-            debug_image = draw_point_history(debug_image, point_history)
-        debug_image = draw_info(
-            debug_image, fps, mode, number, motion_debug_text,
-            'Trace' if trace_mode else 'Motion')
+        debug_image = draw_point_history(debug_image, point_history)
+        debug_image = draw_info(debug_image, fps, mode, number)
 
         # Screen reflection #############################################################
         cv.imshow('Hand Gesture Recognition', debug_image)
@@ -613,17 +526,7 @@ def draw_point_history(image, point_history):
     return image
 
 
-def draw_trace(image, points):
-    if len(points) >= 2:
-        path = np.asarray(points, dtype=np.int32).reshape((-1, 1, 2))
-        cv.polylines(image, [path], False, (0, 255, 0), 4, cv.LINE_AA)
-    if points:
-        cv.circle(image, tuple(np.asarray(points[-1], dtype=int)), 9,
-                  (0, 255, 0), -1, cv.LINE_AA)
-    return image
-
-
-def draw_info(image, fps, mode, number, motion_sign_text='', status_label='Motion'):
+def draw_info(image, fps, mode, number):
     cv.putText(image, "FPS:" + str(fps), (10, 30), cv.FONT_HERSHEY_SIMPLEX,
                1.0, (0, 0, 0), 4, cv.LINE_AA)
     cv.putText(image, "FPS:" + str(fps), (10, 30), cv.FONT_HERSHEY_SIMPLEX,
@@ -638,12 +541,6 @@ def draw_info(image, fps, mode, number, motion_sign_text='', status_label='Motio
             cv.putText(image, "NUM:" + str(number), (10, 110),
                        cv.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1,
                        cv.LINE_AA)
-    if motion_sign_text:
-        cv.putText(image, status_label + ': ' + motion_sign_text, (10, 140),
-                   cv.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 0), 4, cv.LINE_AA)
-        cv.putText(image, status_label + ': ' + motion_sign_text, (10, 140),
-                   cv.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2,
-                   cv.LINE_AA)
     return image
 
 
