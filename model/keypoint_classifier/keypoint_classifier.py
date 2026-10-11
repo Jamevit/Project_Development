@@ -7,7 +7,7 @@ import tensorflow as tf
 class KeyPointClassifier(object):
     def __init__(
         self,
-        model_path='model/keypoint_classifier/keypoint_classifier.tflite',
+        model_path='model/keypoint_classifier/keypoint_classifier_asl_dynamic.tflite',
         num_threads=1,
     ):
         self.interpreter = tf.lite.Interpreter(model_path=model_path,
@@ -17,10 +17,7 @@ class KeyPointClassifier(object):
         self.input_details = self.interpreter.get_input_details()
         self.output_details = self.interpreter.get_output_details()
 
-    def __call__(
-        self,
-        landmark_list,
-    ):
+    def predict_scores(self, landmark_list):
         input_details_tensor_index = self.input_details[0]['index']
         self.interpreter.set_tensor(
             input_details_tensor_index,
@@ -28,9 +25,10 @@ class KeyPointClassifier(object):
         self.interpreter.invoke()
 
         output_details_tensor_index = self.output_details[0]['index']
+        return self.interpreter.get_tensor(output_details_tensor_index)[0]
 
-        result = self.interpreter.get_tensor(output_details_tensor_index)
-
-        result_index = np.argmax(np.squeeze(result))
-
-        return result_index
+    def __call__(
+        self,
+        landmark_list,
+    ):
+        return int(np.argmax(self.predict_scores(landmark_list)))
