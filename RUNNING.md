@@ -1,11 +1,19 @@
-# SignBridge with the ASL-HG model
+# SignBridge LSTM website
 
-Double-click `START_SIGNBRIDGE.cmd` in your SignBridge folder. Wait for **ASL-HG model ready**, then open **http://127.0.0.1:5010**. Choose Try Camera, then Enable Camera. Keep the server window open. No separate Live Server is needed.
+Double-click START_SIGNBRIDGE.cmd in this folder. Wait for **SignBridge LSTM API ready**, then open http://127.0.0.1:5011. Keep the server window open.
 
-This uses the existing candidate trained on ASL-HG, not a newly retrained model. Its recorded validation accuracy is 70.05%, and its held-out-participant dataset test accuracy is 67.57%. These are not webcam scores. J/Z motion is not recognized.
+1. Open Alphabet Practice and enable the camera.
+2. Choose your left or right hand and a reference letter.
+3. Press **Record sign (2 seconds)**. Prepare during the three-second countdown.
+4. At GO, perform one complete sign during the two-second recording. Hold static signs; trace the full J/Z movement.
+5. Wait for the prediction and top three guesses. Press Record sign for another attempt.
 
-The browser sends raw, unmirrored camera frames without drawn landmarks. The Flask backend uses the exact `preprocessing.py` and hand detector from training, then passes RGB 0–255 crops to the saved model, which contains its own normalization. A preview shows the actual crop. Frames are processed locally and are not saved by this application. MediaPipe browser assets require internet access.
+The website loads the same model/keypoint_classifier/lstm_classifier.keras as app.py --lstm in SignBridge_V2 - Copy. Restart the API after exporting a newly trained model. Do not rerun training just to start the website.
 
-The model and frontend are checked through `/health` so an older model is not silently used. Example raw images from participant P9 were sent through the real API: B and C were recognized correctly, while A was incorrectly labeled T. For all three, the returned crop was pixel-identical to the prepared dataset crop. No-hand, invalid-image, and private-file access checks passed. Live webcam accuracy remains unmeasured.
+The API reuses HandReader, clip_input and sequence_features from the working webcam application: mirrored pixel coordinates, handedness normalization and 32-step resampling. Each recording uses its own tracker. No recordings or model weights are changed or saved by the API.
 
-The launcher uses `%USERPROFILE%\Documents\Codex\aslhg-env`, which now includes Flask. Stop any other active webcam tab before testing here. The original camera-only files are backed up before installation.
+The API requires one consistently tracked hand, at least 15 tracked frames, 85% tracking coverage and at least 1.6 seconds of tracked motion. Numbers are reference-only. Stopping the camera, changing hand/reference or leaving the page cancels an in-progress attempt.
+
+Recording lasts two seconds to match the training clips, and is resampled to 32 steps. Complete one sign within this period. The saved 96.15% evaluation does not measure this browser workflow; evaluate new recordings separately.
+
+If the connection fails, close old API windows and relaunch. The launcher expects Python 3.11 at %LocalAppData%/Programs/Python/Python311/python.exe. The website and API both use port 5011. Only index.html, app.js and styles.css are served; datasets and model files are not exposed. Other browser origins must be listed in SIGNBRIDGE_ALLOWED_ORIGINS. Use localhost or HTTPS for camera permission.
