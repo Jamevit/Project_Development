@@ -1,177 +1,134 @@
-#!/usr/bin/env python
-# -*- coding: utf-8 -*-
-"""HTTP inference API for the SignBridge browser client."""
+"""SignBridge: one complete two-second recording per LSTM prediction."""
+from pathlib import Path
 import base64
 import binascii
-import csv
-import copy
-import itertools
 import os
 from threading import Lock
-
 import cv2
-import mediapipe as mp
 import numpy as np
-from flask import Flask, jsonify, request
+from flask import Flask, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
+from hand_sequences import HandReader, FEATURE_VERSION
+from lstm_webcam import load_lstm_model, clip_input, top_predictions
 
-from model import KeyPointClassifier
+ROOT = Path(__file__).resolve().parent
+MODEL_PATH = ROOT / 'model/keypoint_classifier/lstm_classifier.keras'
+DEFAULT_ORIGINS = {f'http://{host}:{port}' for host in ('localhost', '127.0.0.1') for port in (5010,5500,5501)}
 
-LABEL_PATH = 'model/keypoint_classifier/keypoint_classifier_label.csv'
-MODEL_NAME = 'keypoint_classifier_asl_dynamic.tflite'
-PREPROCESSING = 'xy42-v1'
-MAX_BODY = 2 * 1024 * 1024
-MAX_PIXELS = 4_000_000
-DEFAULT_ORIGINS = {
-    f'http://{host}:{port}'
-    for host in ('localhost', '127.0.0.1')
-    for port in (5010, 5500, 5501)
-}
+def decode_frame(value):
+    if not isinstance(value, str) or len(value) > 700000:
+        raise ValueError('Invalid frame or frame too large.')
+    header, sep, encoded = value.partition(',')
+    if not sep or header != 'data:image/jpeg;base64':
+        raise ValueError('Each frame must be a JPEG data URL.')
+    try:
+        raw = base64.b64decode(encoded, validate=True)
+    except (ValueError, binascii.Error):
+        raise ValueError('Invalid image data.')
+    frame = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
+    if frame is None or frame.shape[0]*frame.shape[1] > 1000000:
+        raise ValueError('Invalid image size.')
+    return frame
 
-
-def calc_landmark_list(image, landmarks):
-    image_width, image_height = image.shape[1], image.shape[0]
-
-    landmark_point = []
-
-    # Keypoint
-    for _, landmark in enumerate(landmarks.landmark):
-        landmark_x = min(int(landmark.x * image_width), image_width - 1)
-        landmark_y = min(int(landmark.y * image_height), image_height - 1)
-        # landmark_z = landmark.z
-
-        landmark_point.append([landmark_x, landmark_y])
-
-    return landmark_point
-
-def pre_process_landmark(landmark_list):
-    temp_landmark_list = copy.deepcopy(landmark_list)
-
-    # Convert to relative coordinates
-    base_x, base_y = 0, 0
-    for index, landmark_point in enumerate(temp_landmark_list):
-        if index == 0:
-            base_x, base_y = landmark_point[0], landmark_point[1]
-
-        temp_landmark_list[index][0] = temp_landmark_list[index][0] - base_x
-        temp_landmark_list[index][1] = temp_landmark_list[index][1] - base_y
-
-    # Convert to a one-dimensional list
-    temp_landmark_list = list(
-        itertools.chain.from_iterable(temp_landmark_list))
-
-    # Normalization
-    max_value = max(list(map(abs, temp_landmark_list)))
-
-    def normalize_(n):
-        return n / max_value
-
-    temp_landmark_list = list(map(normalize_, temp_landmark_list))
-
-    return temp_landmark_list
-
-
-def create_app(hands=None, classifier=None):
+def create_app(model=None, reader_factory=None):
     app = Flask(__name__)
-    app.config['MAX_CONTENT_LENGTH'] = MAX_BODY
-    with open(LABEL_PATH, encoding='utf-8-sig') as file:
-        labels = [row[0] for row in csv.reader(file) if row]
-    if labels != list('ABCDEFGHIJKLMNOPQRSTUVWXYZ'):
-        raise ValueError('Expected ordered A-Z keypoint labels.')
-
-    if hands is None:
-        hands = mp.solutions.hands.Hands(
-            static_image_mode=False,
-            max_num_hands=2,
-            min_detection_confidence=0.7,
-            min_tracking_confidence=0.5,
-        )
-    if classifier is None:
-        classifier = KeyPointClassifier(
-            'model/keypoint_classifier/keypoint_classifier_asl_dynamic.tflite')
+    app.config['MAX_CONTENT_LENGTH'] = 24 * 1024 * 1024
+    if model is None:
+        model = load_lstm_model(MODEL_PATH)
+    if model.input_shape != (None,1344) or model.output_shape != (None,26):
+        raise ValueError('Expected an A-Z LSTM with input (None,1344) and output (None,26).')
+    if reader_factory is None:
+        reader_factory = lambda: HandReader(ROOT/'hand_landmarker.task')
     lock = Lock()
-    app.extensions['signbridge_hands'] = hands
-
-    configured_origins = os.environ.get('SIGNBRIDGE_ALLOWED_ORIGINS')
-    allowed_origins = (
-        {origin.strip() for origin in configured_origins.split(',') if origin.strip()}
-        if configured_origins else DEFAULT_ORIGINS
-    )
+    allowed = os.environ.get('SIGNBRIDGE_ALLOWED_ORIGINS')
+    origins = {x.strip() for x in allowed.split(',')} if allowed else DEFAULT_ORIGINS
 
     @app.after_request
-    def add_cors_headers(response):
-        origin = request.headers.get('Origin')
-        if origin in allowed_origins:
-            response.headers['Access-Control-Allow-Origin'] = origin
+    def cors(response):
+        if request.headers.get('Origin') in origins:
+            response.headers['Access-Control-Allow-Origin'] = request.headers['Origin']
             response.headers['Access-Control-Allow-Headers'] = 'Content-Type'
             response.headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS'
             response.vary.add('Origin')
         response.headers['Cache-Control'] = 'no-store'
         return response
 
+    website = ROOT.parent.parent / 'SignBridge_Webpage'
+
+    @app.get('/')
+    @app.get('/index.html')
+    def website_index():
+        return send_from_directory(website, 'index.html')
+
+    @app.get('/app.js')
+    def website_script():
+        return send_from_directory(website, 'app.js')
+
+    @app.get('/styles.css')
+    def website_style():
+        return send_from_directory(website, 'styles.css')
+
     @app.get('/health')
     def health():
-        return jsonify(status='ready', model=MODEL_NAME,
-                       preprocessing=PREPROCESSING, classes=labels)
+        return jsonify(status='ready', model='lstm_classifier.keras', mode='sequence',
+                       preprocessing=FEATURE_VERSION, seconds=2, classes=list('ABCDEFGHIJKLMNOPQRSTUVWXYZ'))
 
-    @app.post('/predict')
-    def predict():
+    @app.post('/predict-sequence')
+    def predict_sequence():
         data = request.get_json(silent=True)
-        if not isinstance(data, dict) or not isinstance(data.get('image'), str):
-            return jsonify(error='Send an image data URL in a JSON object.'), 400
-        header, separator, encoded = data['image'].partition(',')
-        if not separator or header not in {
-                'data:image/jpeg;base64', 'data:image/png;base64'}:
-            return jsonify(error='Send a JPEG or PNG data URL.'), 400
         try:
-            raw = base64.b64decode(encoded, validate=True)
-        except (ValueError, binascii.Error):
-            return jsonify(error='The image data is invalid.'), 400
-        frame = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
-        if frame is None or frame.shape[0] * frame.shape[1] > MAX_PIXELS:
-            return jsonify(error='The image is invalid or too large.'), 400
-
-        try:
+            if not isinstance(data, dict):
+                raise ValueError('Send a recording as JSON.')
+            frames, times = data.get('frames'), data.get('timestamps')
+            if not isinstance(frames, list) or not 15 <= len(frames) <= 60:
+                raise ValueError('Record 15 to 60 frames for one sign.')
+            t = np.asarray(times, dtype=float)
+            if t.shape != (len(frames),) or not np.isfinite(t).all() or np.any(np.diff(t) <= 0):
+                raise ValueError('Invalid recording timestamps.')
+            if t[0] < 0 or t[-1] > 2.5 or not 1.6 <= t[-1]-t[0] <= 2.5:
+                raise ValueError('Record a complete two-second sign.')
+            selected = data.get('hand')
+            if selected not in ('Left', 'Right'):
+                raise ValueError('Choose the hand used for this recording.')
+            points, tracked_times, sides = [], [], []
+            shape = None
+            # A fresh detector for each clip prevents tracking state leaking between users.
             with lock:
-                mirrored = cv2.flip(frame, 1)
-                rgb = cv2.cvtColor(mirrored, cv2.COLOR_BGR2RGB)
-                results = hands.process(rgb)
-                detected = results.multi_hand_landmarks or []
-                if len(detected) != 1:
-                    status = 'multiple_hands' if len(detected) > 1 else 'no_hand'
-                    message = ('Show only one hand.' if detected else
-                               'Show exactly one hand clearly in the camera view.')
-                    return jsonify(status=status, letter=None, confidence=0,
-                                   hand=None, message=message)
-                landmark_list = calc_landmark_list(mirrored, detected[0])
-                features = pre_process_landmark(landmark_list)
-                display_points = np.asarray(landmark_list, dtype=np.float32).copy()
-                display_points[:, 0] = frame.shape[1] - display_points[:, 0]
-                scores = np.asarray(classifier.predict_scores(features), dtype=np.float32)
-            if scores.shape != (len(labels),) or not np.isfinite(scores).all():
-                raise ValueError('The classifier returned invalid scores.')
-            best = int(scores.argmax())
-            hand_side = results.multi_handedness[0].classification[0].label
-            return jsonify(status='ok', letter=labels[best],
-                           confidence=float(scores[best]), hand=hand_side,
-                           landmarks=(display_points / [frame.shape[1], frame.shape[0]]).tolist())
+                reader = reader_factory()
+                try:
+                    for image, timestamp in zip(frames, t):
+                        frame = decode_frame(image)
+                        if shape is not None and frame.shape != shape:
+                            raise ValueError('Camera resolution changed. Record again.')
+                        shape = frame.shape
+                        found = reader.read(frame)
+                        if found is not None:
+                            points.append(found[0]); tracked_times.append(timestamp); sides.append(found[1])
+                    if sides and any(side != selected for side in sides):
+                        raise ValueError('Use your selected hand throughout, or change the hand selection.')
+                    features = clip_input(points, tracked_times, sides, len(frames), seconds=2)
+                    scores = np.asarray(model(features, training=False))[0]
+                    ranking = top_predictions(scores)
+                finally:
+                    reader.close()
+            letter, confidence = ranking[0]
+            return jsonify(status='ok', letter=letter, confidence=confidence, hand=sides[0],
+                           top_predictions=[{'letter':a,'confidence':b} for a,b in ranking],
+                           tracked_frames=len(points), total_frames=len(frames),
+                           duration=float(t[-1]-t[0]), model='lstm_classifier.keras')
+        except (ValueError, TypeError) as error:
+            return jsonify(error=str(error).replace('SPACE to retry.', 'Press Record sign to retry.')), 400
         except Exception:
-            app.logger.exception('ComVision prediction failed')
-            return jsonify(error='Prediction failed. Check the ComVision server.'), 500
+            app.logger.exception('LSTM prediction failed')
+            return jsonify(error='Prediction failed. Check the Python API window.'), 500
 
     @app.errorhandler(HTTPException)
     def http_error(error):
         return jsonify(error=error.description), error.code
-
     return app
-
 
 if __name__ == '__main__':
     api = create_app()
-    host = os.environ.get('SIGNBRIDGE_HOST', '127.0.0.1')
-    port = int(os.environ.get('SIGNBRIDGE_PORT', '5011'))
-    print(f'ComVision API ready on {host}:{port}', flush=True)
-    try:
-        api.run(host=host, port=port, debug=False)
-    finally:
-        api.extensions['signbridge_hands'].close()
+    print('SignBridge LSTM API ready on http://127.0.0.1:5011', flush=True)
+    api.run(host=os.environ.get('SIGNBRIDGE_HOST','127.0.0.1'),
+            port=int(os.environ.get('SIGNBRIDGE_PORT','5011')), debug=False)
