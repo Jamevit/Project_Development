@@ -1,0 +1,6 @@
+{
+  "input": "raw image processed with preprocessing.Preprocessor",
+  "model_pixels": "RGB float32 0-255; scaling is inside model",
+  "overlays": false,
+  "task_sha256": "fbc2a30080c3c557093b5ddfc334698132eb341044ccee322ccf8bcf3607cde1"
+}
